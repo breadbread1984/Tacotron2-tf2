@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import tensorflow as tf;
+import tensorflow_addons as tfa;
 
 class ZoneoutLSTMCell(tf.keras.layers.Layer):
 
@@ -58,6 +59,61 @@ class ZoneoutLSTMCell(tf.keras.layers.Layer):
 
     return cls(config['units'], config['zoneout_h'], config['zoneout_c']);
 
+# LocationSensitiveAttention is an implement of attention algorithm introduced in paper
+# Attention-Based Models for Speech Recognition
+class LocationSensitiveAttention(tfa.seq2seq.BahdanauAttention):
+
+  def __init__(self, units, memory, memory_sequence_length = None, mask_encoder = True, smoothing = False, cumulate_weights = True, **kwargs):
+
+    # memory = [h_{t-T},...,h_t], shape = (batch, seq_length, hidden_dim)
+    super(LocationSensitiveAttention, self).__init__(units = units, memory = memory, memory_sequence_length = memory_sequence_length if mask_encoder else None, normalize = True, **kwargs);
+    self.location_convolution = tf.keras.layers.Conv1D(filters = 32, kernel_size = 31, padding = 'same', use_bias = True, bias_initializer = tf.zeros_initializer());
+    self.location_layer = tf.keras.layers.Dense(units = units, use_bias = False);
+    # params need to be serialized
+    self.mask_encoder = mask_encoder;
+    self.smoothing = smoothing;
+    self.cumulate_weights = cumulate_weights;
+
+  def smoothing_normalization(self, e, _):
+    return tf.math.sigmoid(e) / tf.math.reduce_sum(tf.math.sigmoid(e), axis = -1, keepdims = True);
+
+  def build(self, input_shape):
+
+    super(LocationSensitiveAttention, self).build(input_shape);
+    self.V = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.GlorotNormal());
+    self.b = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.Zeros());
+
+  def call(self, inputs):
+
+    s_tm1 = inputs[0]; # query
+    a_tm1 = inputs[1]; # state
+    # s_tm1 is s_{t-1}, shape = (batch, query_dim)
+    # a_tm1 is a_{t-1}, shape = (batch, seq_length)
+    Ws = self.query_layer(s_tm1); # Ws.shape = (batch, units)
+    Ws = tf.expand_dims(Ws, axis = 1); # Ws.shape = (batch, 1, units)
+    a_tm1 = tf.expand_dims(a_tm1, axis = 2); # a_tm1.shape = (batch, seq_length, 1)
+    conv = self.location_convolution(a_tm1); # conv.shape = (batch, seq_length, 32)
+    Uconv = self.location_layer(conv); # Uconv.shape = (batch, seq_length, units)
+    # NOTE: keys.shape = V_{units x hidden_dim} cdot [h_{t-T}, ... , h_t] = (batch, seq_length, units)
+    energy = tf.math.reduce_sum(self.V * tf.math.tanh(Ws + self.keys + Uconv + self.b), axis = 2); # energy.shape = (batch, seq_length)
+    # NOTE: self.probability_fn uses smoothed probability fn, argument a_tm1 is not used
+    a_t = self.probability_fn(energy, a_tm1) if self.smoothing else tf.keras.layers.Softmax()(energy); # a_t.shape = (batch, seq_length)
+    max_attentions = tf.math.argmax(a_t, -1, output_type = tf.int32); # max_attention.shape = ()
+    next_state = a_t + a_tm1 if self.cumulate_weights else a_t;
+    return a_t, next_state;
+
+  def get_config(self):
+
+    config = super(LocationSensitiveAttention, self).get_config();
+    config['mask_encoder'] = self.mask_encoder;
+    config['smoothing'] = self.smoothing;
+    config['cumulate_weights'] = self.cumulate_weights;
+
+  @classmethod
+  def from_config(cls, config):
+
+    return cls(**config);
+
 class TacotronDecoderCell(tf.keras.layers.Layer):
 
   def __init__(self, units, **kwargs):
@@ -85,8 +141,8 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
     next_cell_state = cell_state;
     for decoder in self.decoders:
       results, next_cell_state = decoder(results, next_cell_state);
-    # 4) compute attention
-    
+    # 4) location sensitive attention
+    results = tf.keras.layers.Conv1D(filters = 32, kernel_size = 31, padding = 'same', )
 
 def Tacotron2(enc_filters = 512, kernel_size = 5, enc_layers = 3, drop_rate = 0.5, enc_lstm_units = 256):
 
@@ -106,13 +162,7 @@ def Tacotron2(enc_filters = 512, kernel_size = 5, enc_layers = 3, drop_rate = 0.
     backward_layer = tf.keras.RNN(ZoneoutLSTMCell(enc_lstm_units), return_sequences = True, go_backwards = True),
     merge_mode = 'concat')(results);
   # 2) tacotron decoder cell
-  # 2.1) prenet
-  # output shape = (batch, seq_length, 256)
-  results = tf.keras.layers.Dense(units = 256, activation = tf.keras.layers.ReLU())(results);
-  results = tf.keras.layers.Dropout(rate = 0.5)(results);
-  results = tf.keras.layers.Dense(units = 256, activation = tf.keras.layers.ReLU())(results);
-  prenet_results = tf.keras.layers.Dropout(rate = 0.5)(results);
-  # 2.2) location sensitive attention
+  # TODO
 
 if __name__ == "__main__":
 
@@ -123,3 +173,9 @@ if __name__ == "__main__":
   state = [tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32), tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32)];
   b = rnn(a, initial_state = state);
   print(b.shape)
+  lsa = LocationSensitiveAttention(100, tf.zeros(8, 10, 32));
+  s_t = tf.constant(np.random.normal(size = (8, 64)));
+  a_tm1 = tf.constant(np.random.normal(size = (8, 10)));
+  a_t, next_state = lsa([s_t, a_tm1]);
+  print(a_t.shape)
+  print(next_state.shape)
