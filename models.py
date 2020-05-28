@@ -96,8 +96,8 @@ class LocationSensitiveAttention(tfa.seq2seq.BahdanauAttention):
     Uconv = self.location_layer(conv); # Uconv.shape = (batch, seq_length, units)
     # NOTE: keys.shape = V_{units x hidden_dim} cdot [h_{t-T}, ... , h_t] = (batch, seq_length, units)
     energy = tf.math.reduce_sum(self.V * tf.math.tanh(Ws + self.keys + Uconv + self.b), axis = 2); # energy.shape = (batch, seq_length)
-    # NOTE: self.probability_fn uses smoothed probability fn, argument a_tm1 is not used
-    a_t = self.probability_fn(energy, a_tm1) if self.smoothing else tf.keras.layers.Softmax()(energy); # a_t.shape = (batch, seq_length)
+    # NOTE: probability_fn is softmax by default
+    a_t = self.smoothing_normalization(energy, a_tm1) if self.smoothing else self.probability_fn(energy, a_tm1); # a_t.shape = (batch, seq_length)
     max_attentions = tf.math.argmax(a_t, -1, output_type = tf.int32); # max_attention.shape = ()
     next_state = a_t + a_tm1 if self.cumulate_weights else a_t;
     return a_t, next_state;
