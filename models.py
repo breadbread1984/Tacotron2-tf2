@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+from math import sqrt;
 import tensorflow as tf;
 import tensorflow_addons as tfa;
 
@@ -61,16 +62,18 @@ class ZoneoutLSTMCell(tf.keras.layers.Layer):
 
 # LocationSensitiveAttention is an implement of attention algorithm introduced in paper
 # Attention-Based Models for Speech Recognition
-class LocationSensitiveAttention(tfa.seq2seq.BahdanauAttention):
+class LocationSensitiveAttention(tf.keras.layers.Layer):
 
-  def __init__(self, units, memory, memory_sequence_length = None, mask_encoder = True, smoothing = False, cumulate_weights = True, **kwargs):
+  def __init__(self, units, smoothing = False, cumulate_weights = True):
 
-    # memory = [h_{t-T},...,h_t], shape = (batch, seq_length, hidden_dim)
-    super(LocationSensitiveAttention, self).__init__(units = units, memory = memory, memory_sequence_length = memory_sequence_length if mask_encoder else None, normalize = True, **kwargs);
+    super(LocationSensitiveAttention, self).__init__();
+    self.query_layer = tf.keras.layers.Dense(units = units);
+    self.memory_layer = tf.keras.layers.Dense(units = units);
     self.location_convolution = tf.keras.layers.Conv1D(filters = 32, kernel_size = 31, padding = 'same', use_bias = True, bias_initializer = tf.zeros_initializer());
     self.location_layer = tf.keras.layers.Dense(units = units, use_bias = False);
+    self.probability_fn = tf.keras.layers.Lambda(lambda e: tf.math.sigmoid(e) / tf.math.reduce_sum(tf.math.sigmoid(e), axis = -1, keepdims = True)) if smoothing else tf.keras.layers.Softmax(axis = -1);
     # params need to be serialized
-    self.mask_encoder = mask_encoder;
+    self.units = units;
     self.smoothing = smoothing;
     self.cumulate_weights = cumulate_weights;
 
@@ -85,19 +88,18 @@ class LocationSensitiveAttention(tfa.seq2seq.BahdanauAttention):
 
   def call(self, inputs):
 
-    s_tm1 = inputs[0]; # query
-    a_tm1 = inputs[1]; # state
-    # s_tm1 is s_{t-1}, shape = (batch, query_dim)
-    # a_tm1 is a_{t-1}, shape = (batch, seq_length)
+    s_tm1 = inputs[0]; # query = s_{t-1}, shape = (batch, query_dim)
+    a_tm1 = inputs[1]; # state = [a_{t-T}, ..., a_t], shape = (batch, seq_length)
+    memory = inputs[2]; # memory = [h_{t-T},...,h_t], shape = (batch, seq_length, hidden_dim)
     Ws = self.query_layer(s_tm1); # Ws.shape = (batch, units)
     Ws = tf.expand_dims(Ws, axis = 1); # Ws.shape = (batch, 1, units)
-    a_tm1 = tf.expand_dims(a_tm1, axis = 2); # a_tm1.shape = (batch, seq_length, 1)
-    conv = self.location_convolution(a_tm1); # conv.shape = (batch, seq_length, 32)
+    keys = self.memory_layer(memory); # keys.shaope = (batch,);
+    conv = self.location_convolution(tf.expand_dims(a_tm1, axis = 2)); # conv.shape = (batch, seq_length, 32)
     Uconv = self.location_layer(conv); # Uconv.shape = (batch, seq_length, units)
     # NOTE: keys.shape = V_{units x hidden_dim} cdot [h_{t-T}, ... , h_t] = (batch, seq_length, units)
-    energy = tf.math.reduce_sum(self.V * tf.math.tanh(Ws + self.keys + Uconv + self.b), axis = 2); # energy.shape = (batch, seq_length)
+    energy = tf.math.reduce_sum(self.V * tf.math.tanh(Ws + keys + Uconv + self.b), axis = 2); # energy.shape = (batch, seq_length)
     # NOTE: probability_fn is softmax by default
-    a_t = self.smoothing_normalization(energy, a_tm1) if self.smoothing else self.probability_fn(energy, a_tm1); # a_t.shape = (batch, seq_length)
+    a_t = self.probability_fn(energy); # a_t.shape = (batch, seq_length)
     max_attentions = tf.math.argmax(a_t, -1, output_type = tf.int32); # max_attention.shape = ()
     next_state = a_t + a_tm1 if self.cumulate_weights else a_t;
     return a_t, next_state;
@@ -105,7 +107,7 @@ class LocationSensitiveAttention(tfa.seq2seq.BahdanauAttention):
   def get_config(self):
 
     config = super(LocationSensitiveAttention, self).get_config();
-    config['mask_encoder'] = self.mask_encoder;
+    config['units'] = self.units;
     config['smoothing'] = self.smoothing;
     config['cumulate_weights'] = self.cumulate_weights;
 
@@ -173,9 +175,9 @@ if __name__ == "__main__":
   state = [tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32), tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32)];
   b = rnn(a, initial_state = state);
   print(b.shape)
-  lsa = LocationSensitiveAttention(100, tf.zeros(8, 10, 32));
+  lsa = LocationSensitiveAttention(100);
   s_t = tf.constant(np.random.normal(size = (8, 64)));
   a_tm1 = tf.constant(np.random.normal(size = (8, 10)));
-  a_t, next_state = lsa([s_t, a_tm1]);
+  a_t, next_state = lsa([s_t, a_tm1, tf.zeros((8,10,32))]);
   print(a_t.shape)
   print(next_state.shape)
