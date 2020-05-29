@@ -56,7 +56,7 @@ class ZoneoutLSTMCell(tf.keras.layers.Layer):
   @classmethod
   def from_config(cls, config):
 
-    return cls(config['units'], config['zoneout_h'], config['zoneout_c']);
+    return cls(**config);
 
 # LocationSensitiveAttention is an implement of attention algorithm introduced in paper
 # Attention-Based Models for Speech Recognition
@@ -84,7 +84,6 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
 
   def build(self, input_shape):
 
-    super(LocationSensitiveAttention, self).build(input_shape);
     self.V = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.GlorotNormal());
     self.b = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.Zeros());
 
