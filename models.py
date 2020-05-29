@@ -1,8 +1,6 @@
 #!/usr/bin/python3
 
-from math import sqrt;
 import tensorflow as tf;
-import tensorflow_addons as tfa;
 
 class ZoneoutLSTMCell(tf.keras.layers.Layer):
 
@@ -64,9 +62,10 @@ class ZoneoutLSTMCell(tf.keras.layers.Layer):
 # Attention-Based Models for Speech Recognition
 class LocationSensitiveAttention(tf.keras.layers.Layer):
 
-  def __init__(self, units, smoothing = False, cumulate_weights = True):
+  def __init__(self, units, smoothing = False, cumulate_weights = True, synthesis_constraint = False, constraint_type = 'window', attention_win_size = 7):
 
     super(LocationSensitiveAttention, self).__init__();
+    # layers
     self.query_layer = tf.keras.layers.Dense(units = units);
     self.memory_layer = tf.keras.layers.Dense(units = units);
     self.location_convolution = tf.keras.layers.Conv1D(filters = 32, kernel_size = 31, padding = 'same', use_bias = True, bias_initializer = tf.zeros_initializer());
@@ -76,6 +75,9 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     self.units = units;
     self.smoothing = smoothing;
     self.cumulate_weights = cumulate_weights;
+    self.synthesis_constraint = synthesis_constraint;
+    self.constraint_type = constraint_type;
+    self.attention_win_size = attention_win_size;
 
   def smoothing_normalization(self, e, _):
     return tf.math.sigmoid(e) / tf.math.reduce_sum(tf.math.sigmoid(e), axis = -1, keepdims = True);
@@ -93,16 +95,31 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     memory = inputs[2]; # memory = [h_{t-T},...,h_t], shape = (batch, seq_length, hidden_dim)
     Ws = self.query_layer(s_tm1); # Ws.shape = (batch, units)
     Ws = tf.expand_dims(Ws, axis = 1); # Ws.shape = (batch, 1, units)
-    keys = self.memory_layer(memory); # keys.shaope = (batch,);
+    keys = self.memory_layer(memory); # keys.shaope = (batch, seq_length, units);
     conv = self.location_convolution(tf.expand_dims(a_tm1, axis = 2)); # conv.shape = (batch, seq_length, 32)
     Uconv = self.location_layer(conv); # Uconv.shape = (batch, seq_length, units)
-    # NOTE: keys.shape = V_{units x hidden_dim} cdot [h_{t-T}, ... , h_t] = (batch, seq_length, units)
     energy = tf.math.reduce_sum(self.V * tf.math.tanh(Ws + keys + Uconv + self.b), axis = 2); # energy.shape = (batch, seq_length)
-    # NOTE: probability_fn is softmax by default
+    def constraint(energy):
+      seq_length = tf.shape(energy)[-1];
+      prev_max_attentions = tf.math.argmax(a_tm1, -1, output_type = tf.int32); # prev_max_attentions.shape = (batch,)
+      if self.constraint_type == 'monotonic':
+        key_masks = tf.sequence_mask(prev_max_attentions, seq_length);
+        reverse_masks = tf.reverse(tf.sequence_mask(seq_length - self.attention_win_size - prev_max_attentions, seq_length), axis = [-1]);
+      elif self.constraint_type == 'window':
+        key_masks = tf.sequence_mask(prev_max_attentions - (self.attention_win_size // 2 + (self.attention_win_size % 2 != 0)), seq_length);
+        reverse_masks = tf.reverse(tf.sequence_mask(seq_length - (self.attention_win_size // 2) - prev_max_attentions, seq_length), axis = [-1]);
+      else:
+        raise Exception('unknonw type of synthesis constraint!');
+      masks = tf.math.logical_or(key_masks, reverse_masks);
+      paddings = tf.ones_like(energy) * (-2 ** 32 + 1);
+      energy = tf.where(tf.equal(masks, False), energy, paddings);
+      return energy;
+    if self.synthesis_constraint:
+      energy = tf.keras.backend.in_train_phase(energy, constraint(energy));
     a_t = self.probability_fn(energy); # a_t.shape = (batch, seq_length)
     max_attentions = tf.math.argmax(a_t, -1, output_type = tf.int32); # max_attention.shape = ()
     next_state = a_t + a_tm1 if self.cumulate_weights else a_t;
-    return a_t, next_state;
+    return next_state, a_t;
 
   def get_config(self):
 
@@ -110,6 +127,9 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     config['units'] = self.units;
     config['smoothing'] = self.smoothing;
     config['cumulate_weights'] = self.cumulate_weights;
+    config['synthesis_constraint'] = self.synthesis_constraint;
+    config['constraint_type'] = self.constraint_type;
+    config['attention_win_size'] = self.attention_win_size;
 
   @classmethod
   def from_config(cls, config):
@@ -175,9 +195,9 @@ if __name__ == "__main__":
   state = [tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32), tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32)];
   b = rnn(a, initial_state = state);
   print(b.shape)
-  lsa = LocationSensitiveAttention(100);
+  lsa = LocationSensitiveAttention(100,synthesis_constraint = True);
   s_t = tf.constant(np.random.normal(size = (8, 64)));
   a_tm1 = tf.constant(np.random.normal(size = (8, 10)));
-  a_t, next_state = lsa([s_t, a_tm1, tf.zeros((8,10,32))]);
+  next_state, a_t = lsa([s_t, a_tm1, tf.zeros((8,10,32))]);
   print(a_t.shape)
   print(next_state.shape)
