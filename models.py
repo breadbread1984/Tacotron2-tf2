@@ -96,18 +96,18 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
 
   def call(self, inputs, state):
 
-    a_tm1 = inputs; # inputs = [a_{t-T}, ..., a_t], shape = (batch, seq_length)
-    s_tm1 = state; # state = s_{t-1}, shape = (batch, query_dim)
+    s_tm1 = inputs; # input = s_{t-1}, shape = (batch, query_dim)
+    # NOTE: state = [a_{t-T}, ..., a_t], shape = (batch, seq_length)
     tf.debugging.assert_equal(self.memory_intiailized, True, message = 'memory is not set!');
     Ws = self.query_layer(s_tm1); # Ws.shape = (batch, units)
     Ws = tf.expand_dims(Ws, axis = 1); # Ws.shape = (batch, 1, units)
     keys = self.memory_layer(self.memory); # keys.shaope = (batch, seq_length, units);
-    conv = self.location_convolution(tf.expand_dims(a_tm1, axis = 2)); # conv.shape = (batch, seq_length, 32)
+    conv = self.location_convolution(tf.expand_dims(state, axis = 2)); # conv.shape = (batch, seq_length, 32)
     Uconv = self.location_layer(conv); # Uconv.shape = (batch, seq_length, units)
     energy = tf.math.reduce_sum(self.V * tf.math.tanh(Ws + keys + Uconv + self.b), axis = 2); # energy.shape = (batch, seq_length)
     def constraint(energy):
       seq_length = tf.shape(energy)[-1];
-      prev_max_attentions = tf.math.argmax(a_tm1, -1, output_type = tf.int32); # prev_max_attentions.shape = (batch,)
+      prev_max_attentions = tf.math.argmax(state, -1, output_type = tf.int32); # prev_max_attentions.shape = (batch,)
       if self.constraint_type == 'monotonic':
         key_masks = tf.sequence_mask(prev_max_attentions, seq_length);
         reverse_masks = tf.reverse(tf.sequence_mask(seq_length - self.attention_win_size - prev_max_attentions, seq_length), axis = [-1]);
@@ -123,7 +123,7 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     if self.synthesis_constraint:
       energy = tf.keras.backend.in_train_phase(energy, constraint(energy));
     a_t = self.probability_fn(energy); # a_t.shape = (batch, seq_length)
-    next_state = a_t + a_tm1 if self.cumulate_weights else a_t;
+    next_state = a_t + state if self.cumulate_weights else a_t;
     return a_t, next_state;
 
   def get_config(self):
