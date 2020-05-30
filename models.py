@@ -96,11 +96,11 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
 
   def call(self, inputs, state):
 
-    query = inputs; # input = s_{t-1}, shape = (batch, query_dim)
+    query = inputs; # query = s_{t-1}, shape = (batch, query_dim)
     prev_state = state[0]; # state = [a_{t-T}, ..., a_t], shape = (batch, seq_length)
     prev_max_attentions = state[1]; # max_attention.shape = (batch,)
-    assert prev_state.dtype == tf.float32;
-    assert prev_max_attentions.dtype == tf.int32;
+    tf.debugging.assert_equal(prev_state.dtype, tf.float32, message = 'prev_state must be in float32 type');
+    tf.debugging.assert_equal(prev_max_attentions.dtype, tf.int32, message = 'prev_max_attentions must be in int32 type');
     tf.debugging.assert_equal(self.memory_intiailized, True, message = 'memory is not set!');
     Ws = self.query_layer(query); # Ws.shape = (batch, units)
     Ws = tf.expand_dims(Ws, axis = 1); # Ws.shape = (batch, 1, units)
