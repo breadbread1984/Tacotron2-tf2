@@ -99,6 +99,8 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     query = inputs; # input = s_{t-1}, shape = (batch, query_dim)
     prev_state = state[0]; # state = [a_{t-T}, ..., a_t], shape = (batch, seq_length)
     prev_max_attentions = state[1]; # max_attention.shape = (batch,)
+    assert prev_state.dtype == tf.float32;
+    assert prev_max_attentions.dtype == tf.int32;
     tf.debugging.assert_equal(self.memory_intiailized, True, message = 'memory is not set!');
     Ws = self.query_layer(query); # Ws.shape = (batch, units)
     Ws = tf.expand_dims(Ws, axis = 1); # Ws.shape = (batch, 1, units)
@@ -123,8 +125,8 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     if self.synthesis_constraint:
       energy = tf.keras.backend.in_train_phase(energy, constraint(energy));
     a_t = self.probability_fn(energy); # a_t.shape = (batch, seq_length)
-    max_attentions = tf.math.argmax(a_t, -1, output_type = tf.int32); # prev_max_attentions.shape = (batch,)
     next_state = a_t + prev_state if self.cumulate_weights else a_t;
+    max_attentions = tf.math.argmax(a_t, -1, output_type = tf.int32); # prev_max_attentions.shape = (batch,)
     return a_t, (next_state, max_attentions);
 
   def get_config(self):
@@ -230,10 +232,11 @@ if __name__ == "__main__":
   state = [tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32), tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32)];
   b = rnn(a, initial_state = state);
   print(b.shape)
-  lsa = LocationSensitiveAttention(100,synthesis_constraint = True);
+  lsa = LocationSensitiveAttention(100, synthesis_constraint = True);
   lsa.setup_memory(tf.zeros((8,10,32)));
-  s_t = tf.constant(np.random.normal(size = (8, 64)));
-  a_tm1 = tf.constant(np.random.normal(size = (8, 10)));
-  a_t, next_state = lsa(a_tm1, s_t);
+  query = tf.constant(np.random.normal(size = (8, 64)));
+  prev_state = tf.constant(np.random.normal(size = (8, 10)), dtype = tf.float32);
+  prev_max_attention = tf.constant(np.random.randint(low = 0, high = 64, size = (8,)), dtype = tf.int32)
+  a_t, (state, max_attention) = lsa(query, (prev_state, prev_max_attention));
   print(a_t.shape)
-  print(next_state.shape)
+  print(state.shape)
