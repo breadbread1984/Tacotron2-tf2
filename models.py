@@ -69,7 +69,7 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     # layers
     self.query_layer = tf.keras.layers.Dense(units = units);
     self.memory_layer = tf.keras.layers.Dense(units = units);
-    self.location_convolution = tf.keras.layers.Conv1D(filters = 32, kernel_size = 31, padding = 'same', use_bias = True, bias_initializer = tf.zeros_initializer());
+    self.location_convolution = tf.keras.layers.Conv1D(filters = 32, kernel_size = 31, padding = 'same', use_bias = True, bias_initializer = tf.keras.initializers.Zeros());
     self.location_layer = tf.keras.layers.Dense(units = units, use_bias = False);
     self.probability_fn = tf.keras.layers.Lambda(lambda e: tf.math.sigmoid(e) / tf.math.reduce_sum(tf.math.sigmoid(e), axis = -1, keepdims = True)) if smoothing else tf.keras.layers.Softmax(axis = -1);
     # params need to be serialized
@@ -96,18 +96,18 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
 
   def call(self, inputs, state):
 
-    s_tm1 = inputs; # input = s_{t-1}, shape = (batch, query_dim)
-    # NOTE: state = [a_{t-T}, ..., a_t], shape = (batch, seq_length)
+    query = inputs; # input = s_{t-1}, shape = (batch, query_dim)
+    prev_state = state[0]; # state = [a_{t-T}, ..., a_t], shape = (batch, seq_length)
+    prev_max_attentions = state[1]; # max_attention.shape = (batch,)
     tf.debugging.assert_equal(self.memory_intiailized, True, message = 'memory is not set!');
-    Ws = self.query_layer(s_tm1); # Ws.shape = (batch, units)
+    Ws = self.query_layer(query); # Ws.shape = (batch, units)
     Ws = tf.expand_dims(Ws, axis = 1); # Ws.shape = (batch, 1, units)
     keys = self.memory_layer(self.memory); # keys.shaope = (batch, seq_length, units);
-    conv = self.location_convolution(tf.expand_dims(state, axis = 2)); # conv.shape = (batch, seq_length, 32)
+    conv = self.location_convolution(tf.expand_dims(prev_state, axis = 2)); # conv.shape = (batch, seq_length, 32)
     Uconv = self.location_layer(conv); # Uconv.shape = (batch, seq_length, units)
     energy = tf.math.reduce_sum(self.V * tf.math.tanh(Ws + keys + Uconv + self.b), axis = 2); # energy.shape = (batch, seq_length)
     def constraint(energy):
       seq_length = tf.shape(energy)[-1];
-      prev_max_attentions = tf.math.argmax(state, -1, output_type = tf.int32); # prev_max_attentions.shape = (batch,)
       if self.constraint_type == 'monotonic':
         key_masks = tf.sequence_mask(prev_max_attentions, seq_length);
         reverse_masks = tf.reverse(tf.sequence_mask(seq_length - self.attention_win_size - prev_max_attentions, seq_length), axis = [-1]);
@@ -123,8 +123,9 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     if self.synthesis_constraint:
       energy = tf.keras.backend.in_train_phase(energy, constraint(energy));
     a_t = self.probability_fn(energy); # a_t.shape = (batch, seq_length)
-    next_state = a_t + state if self.cumulate_weights else a_t;
-    return a_t, next_state;
+    max_attentions = tf.math.argmax(a_t, -1, output_type = tf.int32); # prev_max_attentions.shape = (batch,)
+    next_state = a_t + prev_state if self.cumulate_weights else a_t;
+    return a_t, (next_state, max_attentions);
 
   def get_config(self):
 
