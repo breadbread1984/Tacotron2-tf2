@@ -42,7 +42,7 @@ class ZoneoutLSTMCell(tf.keras.layers.Layer):
     output_t = tf.math.sigmoid(z3); # output_t.shape = (batch, hidden_dim)
     if self.zoneout_c:
       cell_t = self.zoneout(cell_t, cell_tm1, drop_rate = self.zoneout_c);
-    hidden_t = output_t *  tf.math.tanh(cell_t);
+    hidden_t = output_t * tf.math.tanh(cell_t);
     if self.zoneout_h:
       hidden_t = self.zoneout(hidden_t, hidden_tm1, drop_rate = self.zoneout_h);
     return hidden_t, [hidden_t, cell_t];
@@ -64,9 +64,8 @@ class ZoneoutLSTMCell(tf.keras.layers.Layer):
 # Attention-Based Models for Speech Recognition
 class LocationSensitiveAttention(tf.keras.layers.Layer):
 
-  def __init__(self, units, smoothing = False, cumulate_weights = True, synthesis_constraint = False, constraint_type = 'window', attention_win_size = 7):
+  def __init__(self, units, smoothing = False, cumulate_weights = True, synthesis_constraint = False, constraint_type = 'window', attention_win_size = 7, **kwargs):
 
-    super(LocationSensitiveAttention, self).__init__();
     # layers
     self.query_layer = tf.keras.layers.Dense(units = units);
     self.memory_layer = tf.keras.layers.Dense(units = units);
@@ -81,9 +80,11 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     self.constraint_type = constraint_type;
     self.attention_win_size = attention_win_size;
     self.memory_intiailized = False;
-    
+    super(LocationSensitiveAttention, self).__init__(**kwargs);
+
   def setup_memory(self, memory):
 
+    # NOTE: memory is neither on deep dimension nor on temporal dimension, so feed separately
     # memory = [h_{t-T},...,h_t], shape = (batch, seq_length, hidden_dim)
     self.memory = memory;
     self.memory_intiailized = True;
