@@ -94,6 +94,13 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     self.V = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.GlorotNormal());
     self.b = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.Zeros());
 
+  def get_initial_state(self, inputs = None, batch_size = None, dtype = None):
+
+    tf.debugging.assert_equal(self.memory_intiailized, True, message = 'call get_initial_state after setup_memory!');
+    next_state = tf.zeros((batch_size, tf.shape(self.memory)[1]), dtype = tf.float32); # next_state.shape = (batch, seq_length)
+    max_attentions = tf.zeros((batch_size,), dtype = tf.int32); # max_attentions.shape = (batch,)
+    return (next_state, max_attentions);
+
   def call(self, inputs, state):
 
     query = inputs; # query = s_{t-1}, shape = (batch, query_dim)
@@ -125,7 +132,7 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     if self.synthesis_constraint:
       energy = tf.keras.backend.in_train_phase(energy, constraint(energy));
     a_t = self.probability_fn(energy); # a_t.shape = (batch, seq_length)
-    next_state = a_t + prev_state if self.cumulate_weights else a_t;
+    next_state = a_t + prev_state if self.cumulate_weights else a_t; # next_state.shape = (batch, seq_length)
     max_attentions = tf.math.argmax(a_t, -1, output_type = tf.int32); # prev_max_attentions.shape = (batch,)
     return a_t, (next_state, max_attentions);
 
@@ -184,18 +191,21 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
     self.memory = memory;
     self.memory_intiailized = True;
 
-  def zero_state(self, batch_size):
-      
-    cell_state = None;
-    # TODO
+  def get_initial_state(self, inputs = None, batch_size = None, dtype = None):
+    
+    # NOTE: the output shape of self.frame_projection
+    c_t = tf.zeros((batch_size, self.num_mels * self.outputs_per_step), dtype = tf.float32);
+    rnn_state = [[tf.zeros((batch_size, 1024), dtype = tf.float32), tf.zeros((batch_size, 1024), dtype = tf.float32)],
+                 [tf.zeros((batch_size, 1024), dtype = tf.float32), tf.zeros((batch_size, 1024), dtype = tf.float32)]];
+    attention_state = self.attention_mechanism.get_initial_state(batch_size = batch_size);
+    return (c_t, rnn_state, attention_state);
 
   def call(self, inputs, states):
 
     prev_cell_outputs = inputs[0] # prev_cell_outputs.shape = (batch, hidden_dim)    
-    cell_state = states[0];
-    c_tm1 = states[1]; # c_tm1.shape = (batch, hidden_dim)
-    prev_attention_state = states[2]; # state = [a_{t-T}, ..., a_t], shape = (batch, seq_length)
-    prev_max_attentions = states[3]; # max_attention.shape = (batch,)
+    c_tm1 = states[0]; # c_tm1.shape = (batch, hidden_dim)
+    rnn_state = states[1]; # (hidden_state, cell_state)
+    attention_state = states[2]; # (attention_state, max_attention)
     tf.debugging.assert_equal(self.memory_intiailized, True, message = 'memory is not set!');
     # 1) prenet
     # output shape = (batch, 256)
@@ -206,22 +216,23 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
     # 2) lstm input
     lstm_input = tf.keras.layers.Concatenate(axis = -1)([results, c_tm1]); # lstm_input.shape = (batch, 256 + hidden_dim)
     # 3) unidirectional LSTM layers
-    lstm_output, next_cell_state = self.decoder_rnn(tf.expand_dims(lstm_input, axis = 1), initial_state = cell_state); # results.shape = (batch, 1024)
+    lstm_output, next_hidden_state, next_cell_state = self.decoder_rnn(tf.expand_dims(lstm_input, axis = 1), initial_state = rnn_state); # results.shape = (batch, 1024)
     # 4) location sensitive attention
     self.attention_mechanism.setup_memory(self.memory);
-    a_t, (attention_state, max_attentions) = self.attention_mechanism(lstm_output, (prev_attention_state, prev_max_attentions)); # a_t.shape = (batch, seq_length)
+    a_t, (attention_state, max_attentions) = self.attention_mechanism(lstm_output, attention_state); # a_t.shape = (batch, seq_length)
     c_t = tf.math.reduce_sum(tf.expand_dims(a_t, axis = -1) * self.memory, axis = 1); # expanded_a_t.shape = (batch, hidden_dim)
+    # 5) compute predicted frames and predicted stop token
     projections_input = tf.concat([lstm_output, c_t], axis = -1); # projections_input.shape = (batch, 1024 + hidden_dim)
     cell_outputs = self.frame_projection(projections_input); # cell_outputs.shape = (batch, num_mels * outputs_per_step)
     stop_tokens = self.stop_projection(projections_input); # stop_outputs.shape = (batch, outputs_per_step)
-    return (cell_outputs, stop_tokens), (next_cell_state, c_t, attention_state, max_attentions);
+    return (cell_outputs, stop_tokens), (c_t, (next_hidden_state, next_cell_state), (attention_state, max_attentions));
 
   def get_config(self):
 
     config = super(TacotronDecoderCell, self).get_config();
     config['num_mels'] = self.num_mels;
     config['outputs_per_step'] = self.outputs_per_step;
-    
+
   @classmethod
   def from_config(cls, config):
 
