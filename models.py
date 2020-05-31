@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import tensorflow as tf;
+import tensorflow_addons as tfa;
 
 # ZoneoutLSTM is an implement of over-fitting free LSTM introduced in a paper
 # Zoneout: Regularizing RNNs by Randomly Preserving Hidden Activations
@@ -152,7 +153,7 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
     return cls(**config);
 
 # encoder
-def TacotronEncoderCell(enc_filters = 512, kernel_size = 5, enc_layers = 3, drop_rate = 0.5, enc_lstm_units = 256):
+def TacotronEncoder(enc_filters = 512, kernel_size = 5, enc_layers = 3, drop_rate = 0.5, enc_lstm_units = 256):
 
   inputs = tf.keras.Input((None,)); # inputs.shape = (batch, seq_length)
   results = inputs;
@@ -183,13 +184,11 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
     # params need to be serialized
     self.num_mels = num_mels;
     self.outputs_per_step = outputs_per_step;
-    self.memory_intiailized = False;
 
   def setup_memory(self, memory):
     
     # memory.shape = (batch, seq_length, hidden_dim)
-    self.memory = memory;
-    self.memory_intiailized = True;
+    self.attention_mechanism.setup_memory(memory);
 
   def get_initial_state(self, inputs = None, batch_size = None, dtype = None):
     
@@ -206,7 +205,6 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
     c_tm1 = states[0]; # c_tm1.shape = (batch, hidden_dim)
     rnn_state = states[1]; # (hidden_state, cell_state)
     attention_state = states[2]; # (attention_state, max_attention)
-    tf.debugging.assert_equal(self.memory_intiailized, True, message = 'memory is not set!');
     # 1) prenet
     # output shape = (batch, 256)
     results = tf.keras.layers.Dense(units = 256, activation = tf.keras.layers.ReLU())(prev_cell_outputs);
@@ -218,9 +216,8 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
     # 3) unidirectional LSTM layers
     lstm_output, next_hidden_state, next_cell_state = self.decoder_rnn(tf.expand_dims(lstm_input, axis = 1), initial_state = rnn_state); # results.shape = (batch, 1024)
     # 4) location sensitive attention
-    self.attention_mechanism.setup_memory(self.memory);
     a_t, (attention_state, max_attentions) = self.attention_mechanism(lstm_output, attention_state); # a_t.shape = (batch, seq_length)
-    c_t = tf.math.reduce_sum(tf.expand_dims(a_t, axis = -1) * self.memory, axis = 1); # expanded_a_t.shape = (batch, hidden_dim)
+    c_t = tf.math.reduce_sum(tf.expand_dims(a_t, axis = -1) * self.attention_mechanism.memory, axis = 1); # expanded_a_t.shape = (batch, hidden_dim)
     # 5) compute predicted frames and predicted stop token
     projections_input = tf.concat([lstm_output, c_t], axis = -1); # projections_input.shape = (batch, 1024 + hidden_dim)
     cell_outputs = self.frame_projection(projections_input); # cell_outputs.shape = (batch, num_mels * outputs_per_step)
@@ -237,6 +234,7 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
   def from_config(cls, config):
 
     return cls(**config);
+
 
 if __name__ == "__main__":
 
