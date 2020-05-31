@@ -249,9 +249,8 @@ if __name__ == "__main__":
   print(b.shape)
   lsa = LocationSensitiveAttention(100, synthesis_constraint = True);
   lsa.setup_memory(tf.zeros((8,10,32)));
+  state = lsa.get_initial_state(batch_size = 8);
   query = tf.constant(np.random.normal(size = (8, 64)));
-  prev_state = tf.constant(np.random.normal(size = (8, 10)), dtype = tf.float32);
-  prev_max_attention = tf.constant(np.random.randint(low = 0, high = 64, size = (8,)), dtype = tf.int32)
-  a_t, (state, max_attention) = lsa(query, (prev_state, prev_max_attention));
+  a_t, (state, max_attention) = lsa(query, state);
   print(a_t.shape)
   print(state.shape)
