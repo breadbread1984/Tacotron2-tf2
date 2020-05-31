@@ -277,7 +277,7 @@ class Tacotron2(tf.keras.Model):
     results = tf.clip_by_value(decoder_output, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, seq_length, num_mels)
     results = self.postnet(results); # results.shape = (batch, seq_length, 512)
     results = self.frame_projection(results); # results.shape = (batch, seq_length, num_mels)
-    results = tf.keras.layers.Add()([results + decoder_output]); # results.shape = (batch, seq_length, num_mels)
+    results = tf.keras.layers.Add()([results, decoder_output]); # results.shape = (batch, seq_length, num_mels)
     results = tf.clip_by_value(results, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, seq_length, num_mels)
     results = 
     # TODO: post process
