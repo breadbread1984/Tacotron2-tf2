@@ -221,6 +221,7 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
     # 5) compute predicted frames and predicted stop token
     projections_input = tf.concat([lstm_output, c_t], axis = -1); # projections_input.shape = (batch, 1024 + hidden_dim)
     cell_outputs = self.frame_projection(projections_input); # cell_outputs.shape = (batch, num_mels * outputs_per_step)
+    cell_outputs = tf.keras.layers.Reshape((self.num_mels, self.outputs_per_step))(cell_outputs); # cell_outputs.shape = (batch, num_mels, outputs_per_step)
     stop_tokens = self.stop_projection(projections_input); # stop_outputs.shape = (batch, outputs_per_step)
     return (cell_outputs, stop_tokens), (c_t, (next_hidden_state, next_cell_state), (attention_state, max_attentions));
 
@@ -235,6 +236,58 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
 
     return cls(**config);
 
+def PostNet(num_mels = 80, layers = 5, drop_rate = 0.5):
+
+  inputs = tf.keras.Input((None, num_mels));
+  results = inputs;
+  for i in range(layers - 1):
+    results = tf.keras.layers.Conv1D(filters = 512, kernel_size = 5, padding = 'same', activation = tf.math.tanh)(results);
+    results = tf.keras.layers.BatchNormalization()(results);
+    results = tf.keras.layers.Dropout(rate = drop_rate)(results);
+  results = tf.keras.layers.Conv1D(filters = 512, kernel_size = 5, padding = 'same')(results);
+  results = tf.keras.layers.BatchNormalization()(results);
+  results = tf.keras.layers.Dropout(rate = drop_rate)(results);
+  return tf.keras.Model(inputs = inputs, outputs = results);
+
+class Tacotron2(tf.keras.Model):
+
+  def __init__(self, num_mels = 80):
+
+    self.encoder = TacotronEncoder();
+    self.decoder_cell = TacotronDecoderCell(num_mels = num_mels);
+    self.postnet = PostNet(num_mels = num_mels);
+    
+  def call(self, inputs):
+
+    code = self.encoder(inputs);
+    self.decoder_cell.setup_memory(code);
+    state = self.decoder_cell.get_initial_state();
+    output = tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels)); # initial frame is zero
+    outputs = list();
+    while True:
+      output, state = self.decoder_cell(output, state); # output.shape = (batch, num_mels, outputs_per_step)
+      outputs.append(output[0]);
+      finished = tf.cast(tf.math.round(output[1]), dtype = tf.bool); # finished.shape = (batch, outputs_per_step)
+      finished = tf.math.reduce_any(finished);
+      if finished == True: break;
+      if len(outputs) > 10000: break;
+    results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, seq_length, outputs_per_step)
+    decoder_output = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, seq_length, num_mels)
+    results = tf.clip_by_value(decoder_output, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, seq_length, num_mels)
+    results = self.postnet(results); # results.shape = (batch, seq_length, 512)
+    results = tf.keras.layers.Dense(units = self.num_mels)(results); # results.shape = (batch, seq_length, num_mels)
+    results = tf.keras.layers.Add()([results + decoder_output]); # results.shape = (batch, seq_length, num_mels)
+    results = tf.clip_by_value(results, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, seq_length, num_mels)
+    results = 
+    # TODO: post process
+    return outputs;
+
+  def loss(self, inputs):
+
+    # follow implement of TacoTrainingHelper
+    data = inputs[0];
+    label = inputs[1];
+    #TODO:
 
 if __name__ == "__main__":
 
