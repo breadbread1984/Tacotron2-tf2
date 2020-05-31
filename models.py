@@ -256,6 +256,7 @@ class Tacotron2(tf.keras.Model):
     self.encoder = TacotronEncoder();
     self.decoder_cell = TacotronDecoderCell(num_mels = num_mels);
     self.postnet = PostNet(num_mels = num_mels);
+    self.frame_projection = tf.keras.layers.Dense(units = num_mels);
     
   def call(self, inputs):
 
@@ -275,7 +276,7 @@ class Tacotron2(tf.keras.Model):
     decoder_output = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, seq_length, num_mels)
     results = tf.clip_by_value(decoder_output, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, seq_length, num_mels)
     results = self.postnet(results); # results.shape = (batch, seq_length, 512)
-    results = tf.keras.layers.Dense(units = self.num_mels)(results); # results.shape = (batch, seq_length, num_mels)
+    results = self.frame_projection(results); # results.shape = (batch, seq_length, num_mels)
     results = tf.keras.layers.Add()([results + decoder_output]); # results.shape = (batch, seq_length, num_mels)
     results = tf.clip_by_value(results, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, seq_length, num_mels)
     results = 
