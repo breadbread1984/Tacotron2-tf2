@@ -273,7 +273,8 @@ class Tacotron2(tf.keras.Model):
     code = self.encoder(inputs);
     self.decoder_cell.setup_memory(code);
     state = self.decoder_cell.get_initial_state();
-    output = tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels)); # initial frame is zero
+    output = (tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels, self.decoder_cell.outputs_per_step)),
+              tf.zeros((tf.shape(inputs)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
     outputs = list();
     while True:
       output, state = self.decoder_cell(output, state); # output.shape = (batch, num_mels, outputs_per_step)
@@ -283,13 +284,13 @@ class Tacotron2(tf.keras.Model):
       if finished == True: break;
       if len(outputs) > 10000: break;
     results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, output_length, outputs_per_step)
-    decoder_output = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, output_length, num_mels)
-    results = tf.clip_by_value(decoder_output, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, output_length, num_mels)
-    results = self.postnet(results); # results.shape = (batch, output_length, 512)
+    decoder_outputs = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, output_length, num_mels)
+    decoder_outputs = tf.clip_by_value(decoder_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, output_length, num_mels)
+    results = self.postnet(decoder_outputs); # results.shape = (batch, output_length, 512)
     results = self.frame_projection(results); # results.shape = (batch, output_length, num_mels)
-    results = tf.keras.layers.Add()([results, decoder_output]); # results.shape = (batch, output_length, num_mels)
-    results = tf.clip_by_value(results, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, output_length, num_mels)
-    return results;
+    mel_outputs = tf.keras.layers.Add()([results, decoder_outputs]); # mel_outputs.shape = (batch, output_length, num_mels)
+    mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # mel_outputs.shape = (batch, output_length, num_mels)
+    return mel_outputs;
 
   def loss(self, inputs, labels, feed_mode = 'groundtruth', iterations = None):
 
@@ -306,22 +307,25 @@ class Tacotron2(tf.keras.Model):
     # follow implement of TacoTrainingHelper
     code = self.encoder(inputs);
     state = self.decoder_cell.get_initial_state();
-    output = tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels)); # initial frame is zero
+    output = (tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels, self.decoder_cell.outputs_per_step)),
+              tf.zeros((tf.shape(inputs)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
     outputs = list();
     for i in range(tf.shape(labels)[1] - 1):
-      output = tf.cond(tf.less(tf.random_uniform((), minval = 0, max_val = 1, dtype = tf.float32), ratio)
-                       lambda: labels[:,i,:], lambda: output if i == 0 else outputs[-1]);
+      output = (tf.cond(tf.less(tf.random_uniform((), minval = 0, max_val = 1, dtype = tf.float32), ratio)
+                       lambda: labels[:,i,:], lambda: output[0] if i == 0 else outputs[-1]), output[1]);
       output, state = self.decoder_cell(output, state); # output.shape = (batch, num_mels, outputs_per_step)
       outputs.append(output[0]);
     assert(len(outputs) == tf.shape(labels)[1] - 1);
     results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, label_length - 1, outputs_per_step)
-    decoder_output = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, label_length - 1, num_mels)
-    results = tf.clip_by_value(decoder_output, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, label_length - 1, num_mels)
-    results = self.postnet(results); # results.shape = (batch, label_length - 1, 512)
+    decoder_outputs = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, label_length - 1, num_mels)
+    decoder_outputs = tf.clip_by_value(decoder_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, label_length - 1, num_mels)
+    results = self.postnet(decoder_outputs); # results.shape = (batch, label_length - 1, 512)
     results = self.frame_projection(results); # results.shape = (batch, label_length - 1, num_mels)
-    results = tf.keras.layers.Add()([results, decoder_output]); # results.shape = (batch, label_length - 1, num_mels)
-    results = tf.clip_by_value(results, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, label_length - 1, num_mels)
-    #TODO:
+    mel_outputs = tf.keras.layers.Add()([results, decoder_outputs]); # mel_outputs.shape = (batch, label_length - 1, num_mels)
+    mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # mel_outputs.shape = (batch, label_length - 1, num_mels)
+    # get loss
+    regression_loss = tf.keras.losses.MSE(labels[:,1:,:], decoder_outputs) + tf.keras.losses.MSE(labels[:,1:,:], mel_outputs);
+    classification_loss = tf.keras.losses.
 
 if __name__ == "__main__":
 
