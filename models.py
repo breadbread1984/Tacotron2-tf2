@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 
+from math import cos, pi;
 import tensorflow as tf;
-import tensorflow_addons as tfa;
 
 # ZoneoutLSTM is an implement of over-fitting free LSTM introduced in a paper
 # Zoneout: Regularizing RNNs by Randomly Preserving Hidden Activations
@@ -257,7 +257,17 @@ class Tacotron2(tf.keras.Model):
     self.decoder_cell = TacotronDecoderCell(num_mels = num_mels);
     self.postnet = PostNet(num_mels = num_mels);
     self.frame_projection = tf.keras.layers.Dense(units = num_mels);
-    
+
+  def ratio(self, iterations):
+
+    alpha = 0;
+    global_step = iterations - 10000;
+    global_step = min(global_step, 40000);
+    cosine_decay = 0.5 * (1 + cos(pi * global_step / 40000));
+    decayed = (1 - alpha) * cosine_decay + alpha;
+    decayed_learning_rate = 1. * decayed;
+    return decayed_learning_rate;
+
   def call(self, inputs):
 
     code = self.encoder(inputs);
@@ -272,22 +282,45 @@ class Tacotron2(tf.keras.Model):
       finished = tf.math.reduce_any(finished);
       if finished == True: break;
       if len(outputs) > 10000: break;
-    results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, seq_length, outputs_per_step)
-    decoder_output = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, seq_length, num_mels)
-    results = tf.clip_by_value(decoder_output, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, seq_length, num_mels)
-    results = self.postnet(results); # results.shape = (batch, seq_length, 512)
-    results = self.frame_projection(results); # results.shape = (batch, seq_length, num_mels)
-    results = tf.keras.layers.Add()([results, decoder_output]); # results.shape = (batch, seq_length, num_mels)
-    results = tf.clip_by_value(results, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, seq_length, num_mels)
-    results = 
-    # TODO: post process
-    return outputs;
+    results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, output_length, outputs_per_step)
+    decoder_output = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, output_length, num_mels)
+    results = tf.clip_by_value(decoder_output, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, output_length, num_mels)
+    results = self.postnet(results); # results.shape = (batch, output_length, 512)
+    results = self.frame_projection(results); # results.shape = (batch, output_length, num_mels)
+    results = tf.keras.layers.Add()([results, decoder_output]); # results.shape = (batch, output_length, num_mels)
+    results = tf.clip_by_value(results, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, output_length, num_mels)
+    return results;
 
-  def loss(self, inputs):
+  def loss(self, inputs, labels, feed_mode = 'groundtruth', iterations = None):
 
+    # inputs.shape = (batch, seq_length)
+    # labels.shape = (batch, label_length, num_mels)
+    assert feed_mode in ['groundtruth', 'eval', 'scheduled'];
+    # feed_mode:
+    # 1) ground truth: always feed ground truth
+    # 2) eval: always feed prediction of previous time
+    # 3) scheduled: feed ground truth at first and gradually use feed prediction of previous time
+    if feed_model == 'scheduled': assert iterations is not None;
+    ratio = 1. if feed_mode == 'groundtruth' else (0. if feed_mode == 'eval' else (self.ratio(iterations) if feed_model == 'scheduled' else None));
+    assert ratio is not None:
     # follow implement of TacoTrainingHelper
-    data = inputs[0];
-    label = inputs[1];
+    code = self.encoder(inputs);
+    state = self.decoder_cell.get_initial_state();
+    output = tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels)); # initial frame is zero
+    outputs = list();
+    for i in range(tf.shape(labels)[1] - 1):
+      output = tf.cond(tf.less(tf.random_uniform((), minval = 0, max_val = 1, dtype = tf.float32), ratio)
+                       lambda: labels[:,i,:], lambda: output if i == 0 else outputs[-1]);
+      output, state = self.decoder_cell(output, state); # output.shape = (batch, num_mels, outputs_per_step)
+      outputs.append(output[0]);
+    assert(len(outputs) == tf.shape(labels)[1] - 1);
+    results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, label_length - 1, outputs_per_step)
+    decoder_output = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, label_length - 1, num_mels)
+    results = tf.clip_by_value(decoder_output, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, label_length - 1, num_mels)
+    results = self.postnet(results); # results.shape = (batch, label_length - 1, 512)
+    results = self.frame_projection(results); # results.shape = (batch, label_length - 1, num_mels)
+    results = tf.keras.layers.Add()([results, decoder_output]); # results.shape = (batch, label_length - 1, num_mels)
+    results = tf.clip_by_value(results, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, label_length - 1, num_mels)
     #TODO:
 
 if __name__ == "__main__":
