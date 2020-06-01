@@ -249,6 +249,23 @@ def PostNet(num_mels = 80, layers = 5, drop_rate = 0.5):
   results = tf.keras.layers.Dropout(rate = drop_rate)(results);
   return tf.keras.Model(inputs = inputs, outputs = results);
 
+def CBHG(kernel_size = 8, num_mels = 80):
+
+  inputs = tf.keras.Input((None, num_mels)); # inputs.shape = (batch, seq_length, num_mels)
+  conv_results = list();
+  for i in range(kernel_size):
+    results = tf.keras.layers.Conv1D(filters = 128, kernel_size = i + 1, padding = 'same', activation = tf.keras.layers.ReLU())(inputs);
+    results = tf.keras.layers.BatchNormalization()(results);
+    conv_results.append(results);
+  results = tf.keras.layers.Concatenate(axis = -1)(conv_results); # results.shape = (batch, seq_length, 8 * 128)
+  results = tf.keras.layers.MaxPool1D(pool_size = 2, strides = 1, padding = 'same')(results); # results.shape = (batch, seq_length, 8 * 128)
+  results = tf.keras.layers.Conv1D(filters = 256, kernel_size = 3, padding = 'same', activation = tf.keras.layers.ReLU())(results); # results.shape = (batch, seq_length, 256)
+  results = tf.keras.layers.BatchNormalization()(results); # results.shape = (batch, seq_length, 256)
+  results = tf.keras.layers.Conv1D(filters = num_mels, kernel_size = 3, padding = 'same')(results); # results.shape = (batch, seq_length, num_mels)
+  results = tf.keras.layers.BatchNormalization()(results); # results.shape = (batch, seq_length, num_mels)
+  results = tf.keras.layers.Add()([results, inputs]); # results.shape = (batch, seq_length, num_mels)
+  results = # TODO:
+
 class Tacotron2(tf.keras.Model):
 
   def __init__(self, num_mels = 80):
@@ -310,22 +327,29 @@ class Tacotron2(tf.keras.Model):
     output = (tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels, self.decoder_cell.outputs_per_step)),
               tf.zeros((tf.shape(inputs)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
     outputs = list();
+    stop_tokens = list();
     for i in range(tf.shape(labels)[1] - 1):
       output = (tf.cond(tf.less(tf.random_uniform((), minval = 0, max_val = 1, dtype = tf.float32), ratio)
                        lambda: labels[:,i,:], lambda: output[0] if i == 0 else outputs[-1]), output[1]);
       output, state = self.decoder_cell(output, state); # output.shape = (batch, num_mels, outputs_per_step)
-      outputs.append(output[0]);
+      outputs.append(output[0]); # output[0].shape = (batch, num_mels, outputs_per_step)
+      stop_tokens.append(output[1]); # output[1].shape = (batch, output_per_step)
     assert(len(outputs) == tf.shape(labels)[1] - 1);
     results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, label_length - 1, outputs_per_step)
     decoder_outputs = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, label_length - 1, num_mels)
     decoder_outputs = tf.clip_by_value(decoder_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, label_length - 1, num_mels)
+    stop_tokens = tf.keras.layers.Concatenate(axis = 1)(stop_tokens); # stop_tokens.shape = (batch, outpuut_per_step * (label_length - 1))
     results = self.postnet(decoder_outputs); # results.shape = (batch, label_length - 1, 512)
     results = self.frame_projection(results); # results.shape = (batch, label_length - 1, num_mels)
     mel_outputs = tf.keras.layers.Add()([results, decoder_outputs]); # mel_outputs.shape = (batch, label_length - 1, num_mels)
     mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # mel_outputs.shape = (batch, label_length - 1, num_mels)
+    # post condition
+    
     # get loss
     regression_loss = tf.keras.losses.MSE(labels[:,1:,:], decoder_outputs) + tf.keras.losses.MSE(labels[:,1:,:], mel_outputs);
-    classification_loss = tf.keras.losses.
+    stop_tokens_gt = tf.keras.layers.Concatenate(axis = -1)([tf.zeros((tf.shape(inputs)[0], tf.shape(labels)[1] - 2), dtype = tf.float32), 
+                                                             tf.ones((tf.shape(inputs)[0], 1), dtype = tf.float32)]); # stop_tokens_gt.shape = (batch, label_length - 1)
+    classification_loss = tf.keras.losses.BinaryCrossentropy(from_logits = True)(stop_tokens_gt, stop_tokens);
 
 if __name__ == "__main__":
 
