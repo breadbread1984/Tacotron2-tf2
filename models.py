@@ -291,7 +291,7 @@ class Tacotron2(tf.keras.Model):
     self.postnet = PostNet(num_mels = num_mels);
     self.frame_projection = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
     self.frame_projection2 = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
-    self.cghg = CBHG(num_mels = num_mels);
+    self.cbhg = CBHG(num_mels = num_mels);
 
   def ratio(self, iterations):
 
