@@ -3,6 +3,15 @@
 from math import cos, pi;
 import tensorflow as tf;
 
+def PreNet(units = 256, layers = 2, drop_rate = 0.5):
+
+  inputs = tf.keras.Input((None,)); # inputs.shape = (batch, hidden_dim)
+  results = inputs;
+  for i in range(layers):
+    results = tf.keras.layers.Dense(units = units, activation = tf.keras.layers.ReLU(), kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results);
+    results = tf.keras.layers.Dropout(rate = drop_rate)(results); # results.shape = (batch, 256)
+  return tf.keras.Model(inputs = inputs, outputs = results);
+
 # ZoneoutLSTM is an implement of over-fitting free LSTM introduced in a paper
 # Zoneout: Regularizing RNNs by Randomly Preserving Hidden Activations
 class ZoneoutLSTMCell(tf.keras.layers.Layer):
@@ -68,10 +77,10 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
   def __init__(self, units, smoothing = False, cumulate_weights = True, synthesis_constraint = False, constraint_type = 'window', attention_win_size = 7, **kwargs):
 
     # layers
-    self.query_layer = tf.keras.layers.Dense(units = units);
-    self.memory_layer = tf.keras.layers.Dense(units = units);
-    self.location_convolution = tf.keras.layers.Conv1D(filters = 32, kernel_size = 31, padding = 'same', use_bias = True, bias_initializer = tf.keras.initializers.Zeros());
-    self.location_layer = tf.keras.layers.Dense(units = units, use_bias = False);
+    self.query_layer = tf.keras.layers.Dense(units = units, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
+    self.memory_layer = tf.keras.layers.Dense(units = units, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
+    self.location_convolution = tf.keras.layers.Conv1D(filters = 32, kernel_size = 31, padding = 'same', use_bias = True, bias_initializer = tf.keras.initializers.Zeros(), kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
+    self.location_layer = tf.keras.layers.Dense(units = units, use_bias = False, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
     self.probability_fn = tf.keras.layers.Lambda(lambda e: tf.math.sigmoid(e) / tf.math.reduce_sum(tf.math.sigmoid(e), axis = -1, keepdims = True)) if smoothing else tf.keras.layers.Softmax(axis = -1);
     # params need to be serialized
     self.units = units;
@@ -161,7 +170,7 @@ def TacotronEncoder(enc_filters = 512, kernel_size = 5, enc_layers = 3, drop_rat
   # 1.1) convolutional layers
   # output shape = (batch, seq_length, enc_filters)
   for i in range(enc_layers):
-    results = tf.keras.layers.Conv1D(filters = enc_filters, kernel_size = kernel_size, padding = 'same', activation = tf.keras.layers.ReLU())(results);
+    results = tf.keras.layers.Conv1D(filters = enc_filters, kernel_size = kernel_size, padding = 'same', activation = tf.keras.layers.ReLU(), kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results);
     results = tf.keras.layers.BatchNormalization()(results);
     results = tf.keras.layers.Dropout(rate = drop_rate)(results);
   # 1.2) rnn layers (will use zoneout LSTM instead when it is available in tf.keras)
@@ -177,10 +186,11 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
 
   def __init__(self, num_mels = 80, outputs_per_step = 1, **kwargs):
 
+    self.prenet = PreNet();
     self.decoder_rnn = tf.keras.layers.RNN([ZoneoutLSTMCell(1024, 0.1, 0.1) for i in range(2)], return_state = True);
     self.attention_mechanism = LocationSensitiveAttention(128, cumulate_weights = True, synthesis_constraint = False);
-    self.frame_projection = tf.keras.layers.Dense(units = num_mels * outputs_per_step);
-    self.stop_projection = tf.keras.layers.Dense(units = outputs_per_step, activation = tf.nn.sigmoid);
+    self.frame_projection = tf.keras.layers.Dense(units = num_mels * outputs_per_step, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
+    self.stop_projection = tf.keras.layers.Dense(units = outputs_per_step, activation = tf.nn.sigmoid, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
     # params need to be serialized
     self.num_mels = num_mels;
     self.outputs_per_step = outputs_per_step;
@@ -207,10 +217,7 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
     attention_state = states[2]; # (attention_state, max_attention)
     # 1) prenet
     # output shape = (batch, 256)
-    results = tf.keras.layers.Dense(units = 256, activation = tf.keras.layers.ReLU())(prev_cell_outputs);
-    results = tf.keras.layers.Dropout(rate = 0.5)(results);
-    results = tf.keras.layers.Dense(units = 256, activation = tf.keras.layers.ReLU())(results);
-    results = tf.keras.layers.Dropout(rate = 0.5)(results);
+    results = self.prenet(prev_cell_outputs);
     # 2) lstm input
     lstm_input = tf.keras.layers.Concatenate(axis = -1)([results, c_tm1]); # lstm_input.shape = (batch, 256 + hidden_dim)
     # 3) unidirectional LSTM layers
@@ -241,30 +248,40 @@ def PostNet(num_mels = 80, layers = 5, drop_rate = 0.5):
   inputs = tf.keras.Input((None, num_mels));
   results = inputs;
   for i in range(layers - 1):
-    results = tf.keras.layers.Conv1D(filters = 512, kernel_size = 5, padding = 'same', activation = tf.math.tanh)(results);
+    results = tf.keras.layers.Conv1D(filters = 512, kernel_size = 5, padding = 'same', activation = tf.math.tanh, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results);
     results = tf.keras.layers.BatchNormalization()(results);
     results = tf.keras.layers.Dropout(rate = drop_rate)(results);
-  results = tf.keras.layers.Conv1D(filters = 512, kernel_size = 5, padding = 'same')(results);
+  results = tf.keras.layers.Conv1D(filters = 512, kernel_size = 5, padding = 'same', kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results);
   results = tf.keras.layers.BatchNormalization()(results);
   results = tf.keras.layers.Dropout(rate = drop_rate)(results);
   return tf.keras.Model(inputs = inputs, outputs = results);
 
-def CBHG(kernel_size = 8, num_mels = 80):
+def CBHG(kernel_size = 8, num_mels = 80, highway_units = 128, highway_layers = 4, rnn_units = 128):
 
   inputs = tf.keras.Input((None, num_mels)); # inputs.shape = (batch, seq_length, num_mels)
   conv_results = list();
   for i in range(kernel_size):
-    results = tf.keras.layers.Conv1D(filters = 128, kernel_size = i + 1, padding = 'same', activation = tf.keras.layers.ReLU())(inputs);
+    results = tf.keras.layers.Conv1D(filters = 128, kernel_size = i + 1, padding = 'same', activation = tf.keras.layers.ReLU(), kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(inputs);
     results = tf.keras.layers.BatchNormalization()(results);
     conv_results.append(results);
   results = tf.keras.layers.Concatenate(axis = -1)(conv_results); # results.shape = (batch, seq_length, 8 * 128)
   results = tf.keras.layers.MaxPool1D(pool_size = 2, strides = 1, padding = 'same')(results); # results.shape = (batch, seq_length, 8 * 128)
-  results = tf.keras.layers.Conv1D(filters = 256, kernel_size = 3, padding = 'same', activation = tf.keras.layers.ReLU())(results); # results.shape = (batch, seq_length, 256)
+  results = tf.keras.layers.Conv1D(filters = 256, kernel_size = 3, padding = 'same', activation = tf.keras.layers.ReLU(), kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results); # results.shape = (batch, seq_length, 256)
   results = tf.keras.layers.BatchNormalization()(results); # results.shape = (batch, seq_length, 256)
-  results = tf.keras.layers.Conv1D(filters = num_mels, kernel_size = 3, padding = 'same')(results); # results.shape = (batch, seq_length, num_mels)
+  results = tf.keras.layers.Conv1D(filters = num_mels, kernel_size = 3, padding = 'same', kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results); # results.shape = (batch, seq_length, num_mels)
   results = tf.keras.layers.BatchNormalization()(results); # results.shape = (batch, seq_length, num_mels)
   results = tf.keras.layers.Add()([results, inputs]); # results.shape = (batch, seq_length, num_mels)
-  results = # TODO:
+  if highway_units != results.shape[-1]:
+    results = tf.keras.layers.Dense(units = highway_units, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results); # results.shape = (batch, seq_length, highway_units)
+  for i in range(highway_layers):
+    prev_results = results;
+    H = tf.keras.layers.Dense(units = highway_units, activation = tf.keras.layers.ReLU(), kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(prev_results); # H.shape = (batch, seq_length, highway_units)
+    T = tf.keras.layers.Dense(units = highway_units, activation = tf.math.sigmoid, bias_initializer = tf.keras.initializers.Constant(-1.), kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(prev_results); # T.shape = (batch, seq_length, highway_units)
+    results = tf.keras.layers.Lambda(lambda x: x[0] * x[1] + x[2] * (1. - x[1]))([H,T,inputs]); # results.shape = (batch, seq_length, highway_units)
+  results = tf.keras.layers.Bidirectional(layers = tf.keras.layers.GRU(rnn_units, return_sequences = True),
+                                          backward_layer = tf.keras.layers.GRU(rnn_units, return_sequences = True, go_backwards = True),
+                                          merge_mode = 'concat')(results); # results.shape = (batch, seq_length, 2 * rnn_units)
+  return tf.keras.Model(inputs = inputs, outputs = results);
 
 class Tacotron2(tf.keras.Model):
 
@@ -273,7 +290,9 @@ class Tacotron2(tf.keras.Model):
     self.encoder = TacotronEncoder();
     self.decoder_cell = TacotronDecoderCell(num_mels = num_mels);
     self.postnet = PostNet(num_mels = num_mels);
-    self.frame_projection = tf.keras.layers.Dense(units = num_mels);
+    self.frame_projection = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
+    self.frame_projection2 = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
+    self.cghg = CBHG(num_mels = num_mels);
 
   def ratio(self, iterations):
 
@@ -309,7 +328,7 @@ class Tacotron2(tf.keras.Model):
     mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # mel_outputs.shape = (batch, output_length, num_mels)
     return mel_outputs;
 
-  def loss(self, inputs, labels, feed_mode = 'groundtruth', iterations = None):
+  def loss(self, inputs, labels, feed_mode = 'groundtruth', iterations = None, sample_rate = 22050, num_freq = 1025):
 
     # inputs.shape = (batch, seq_length)
     # labels.shape = (batch, label_length, num_mels)
@@ -344,12 +363,17 @@ class Tacotron2(tf.keras.Model):
     mel_outputs = tf.keras.layers.Add()([results, decoder_outputs]); # mel_outputs.shape = (batch, label_length - 1, num_mels)
     mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # mel_outputs.shape = (batch, label_length - 1, num_mels)
     # post condition
-    
+    post_cbhg = self.cbhg(mel_outputs); # post_cbhg.shape = (batch, label_length - 1, 2 * rnn_units)
+    linear_specs_projection = self.frame_projection2(post_cbhg); # linear_specs_projection.shape = (batch, label_length - 1, num_mels)
     # get loss
     regression_loss = tf.keras.losses.MSE(labels[:,1:,:], decoder_outputs) + tf.keras.losses.MSE(labels[:,1:,:], mel_outputs);
     stop_tokens_gt = tf.keras.layers.Concatenate(axis = -1)([tf.zeros((tf.shape(inputs)[0], tf.shape(labels)[1] - 2), dtype = tf.float32), 
                                                              tf.ones((tf.shape(inputs)[0], 1), dtype = tf.float32)]); # stop_tokens_gt.shape = (batch, label_length - 1)
     classification_loss = tf.keras.losses.BinaryCrossentropy(from_logits = True)(stop_tokens_gt, stop_tokens);
+    l1 = tf.math.abs(labels[:,1:,:] - linear_specs_projection);
+    n_priority_freq = int(2000 / (sample_rate * 0.5) * num_freq);
+    linear_loss = 0.5 * tf.math.reduce_mean(l1) + 0.5 * tf.math.reduce_mean(l1[:,:,n_priority_freq]);
+    return regression_loss + classification_loss + linear_loss;
 
 if __name__ == "__main__":
 
