@@ -34,7 +34,7 @@ class ZoneoutLSTMCell(tf.keras.layers.Layer):
 
   def build(self, input_shape):
 
-    self.W = self.add_weight(shape = (input_shape[-1], 4 * self.units), name = 'zeonout_w'); # shape = (input_dim, 4 * hidden_dim)
+    self.W = self.add_weight(shape = (input_shape[-1], 4 * self.units), name = 'zoneout_w'); # shape = (input_dim, 4 * hidden_dim)
     self.U = self.add_weight(shape = (self.units, 4 * self.units), name = 'zoneout_u'); # shape = (hidden_dim, 4 * hidden_dim)
     self.b = self.add_weight(shape = (4 * self.units,), name = 'zoneout_b'); # shape = (4 * hidden_dim)
 
@@ -177,8 +177,8 @@ def TacotronEncoder(enc_filters = 512, kernel_size = 5, enc_layers = 3, drop_rat
   # 1.2) rnn layers (will use zoneout LSTM instead when it is available in tf.keras)
   # output shape = (batch, seq_length, 2 * enc_lstm_units)
   results = tf.keras.layers.Bidirectional(
-    layer = tf.keras.layers.RNN(ZoneoutLSTMCell(enc_lstm_units), return_sequences = True),
-    backward_layer = tf.keras.layers.RNN(ZoneoutLSTMCell(enc_lstm_units), return_sequences = True, go_backwards = True),
+    layer = tf.keras.layers.RNN(ZoneoutLSTMCell(enc_lstm_units, 0.1, 0.1), return_sequences = True),
+    backward_layer = tf.keras.layers.RNN(ZoneoutLSTMCell(enc_lstm_units, 0.1, 0.1), return_sequences = True, go_backwards = True),
     merge_mode = 'concat')(results);
   return tf.keras.Model(inputs = inputs, outputs = results);
 
@@ -205,7 +205,8 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
   def get_initial_state(self, inputs = None, batch_size = None, dtype = None):
     
     # NOTE: the output shape of self.frame_projection
-    c_t = tf.zeros((batch_size, self.num_mels * self.outputs_per_step), dtype = tf.float32);
+    tf.debugging.assert_equal(self.attention_mechanism.memory_intiailized, True, message = 'call get_initial_state after setup_memory!');
+    c_t = tf.zeros((batch_size, self.attention_mechanism.memory.shape[-1]), dtype = tf.float32);
     rnn_state = [[tf.zeros((batch_size, 1024), dtype = tf.float32), tf.zeros((batch_size, 1024), dtype = tf.float32)],
                  [tf.zeros((batch_size, 1024), dtype = tf.float32), tf.zeros((batch_size, 1024), dtype = tf.float32)]];
     attention_state = self.attention_mechanism.get_initial_state(batch_size = batch_size);
@@ -432,3 +433,4 @@ if __name__ == "__main__":
   b = tacotron2(a);
   print(b.shape);
   tacotron2.save_weights('tacotron2.h5');
+  tf.keras.utils.plot_model(model = tacotron2, to_file = 'tacotron2.png', show_shapes = True, dpi = 64);
