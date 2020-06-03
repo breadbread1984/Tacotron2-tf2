@@ -315,14 +315,15 @@ class Tacotron2(tf.keras.Model):
               tf.zeros((tf.shape(inputs)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
     outputs = list();
     while True:
-      output, state = self.decoder_cell(output, state); # output.shape = (batch, num_mels, outputs_per_step)
+      output, state = self.decoder_cell(output, state); # output[0].shape = (batch, num_mels * outputs_per_step)
       outputs.append(output[0]);
       finished = tf.cast(tf.math.round(output[1]), dtype = tf.bool); # finished.shape = (batch, outputs_per_step)
       finished = tf.math.reduce_any(finished);
       if finished == True: break;
       if len(outputs) > 10000: break;
-    results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, output_length, outputs_per_step)
-    decoder_outputs = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, output_length, num_mels)
+    if len(outputs) == 1: results = outputs[0];
+    else: results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, output_length * num_mels * outputs_per_step)
+    decoder_outputs = tf.keras.layers.Reshape((-1, self.decoder_cell.num_mels))(results); # results.shape = (batch, output_length, num_mels)
     decoder_outputs = tf.clip_by_value(decoder_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, output_length, num_mels)
     results = self.postnet(decoder_outputs); # results.shape = (batch, output_length, 512)
     results = self.frame_projection(results); # results.shape = (batch, output_length, num_mels)
@@ -355,7 +356,8 @@ class Tacotron2(tf.keras.Model):
       outputs.append(output[0]); # output[0].shape = (batch, num_mels, outputs_per_step)
       stop_tokens.append(output[1]); # output[1].shape = (batch, output_per_step)
     assert(len(outputs) == tf.shape(labels)[1] - 1);
-    results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, label_length - 1, outputs_per_step)
+    if len(outputs) == 1: results = outputs[0];
+    else: results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, label_length - 1, outputs_per_step)
     decoder_outputs = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, label_length - 1, num_mels)
     decoder_outputs = tf.clip_by_value(decoder_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, label_length - 1, num_mels)
     stop_tokens = tf.keras.layers.Concatenate(axis = 1)(stop_tokens); # stop_tokens.shape = (batch, outpuut_per_step * (label_length - 1))
