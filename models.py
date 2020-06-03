@@ -246,7 +246,7 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
 
 def PostNet(num_mels = 80, layers = 5, drop_rate = 0.5):
 
-  inputs = tf.keras.Input((None, num_mels));
+  inputs = tf.keras.Input((None, num_mels)); # inputs.shape = (batch, seq_length, num_mels)
   results = inputs;
   for i in range(layers - 1):
     results = tf.keras.layers.Conv1D(filters = 512, kernel_size = 5, padding = 'same', activation = tf.math.tanh, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results);
@@ -278,7 +278,7 @@ def CBHG(kernel_size = 8, num_mels = 80, highway_units = 128, highway_layers = 4
     H = tf.keras.layers.Dense(units = highway_units, activation = tf.keras.layers.ReLU(), kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results); # H.shape = (batch, seq_length, highway_units)
     T = tf.keras.layers.Dense(units = highway_units, activation = tf.math.sigmoid, bias_initializer = tf.keras.initializers.Constant(-1.), kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3))(results); # T.shape = (batch, seq_length, highway_units)
     results = tf.keras.layers.Lambda(lambda x: x[0] * x[1] + x[2] * (1. - x[1]))([H,T,results]); # results.shape = (batch, seq_length, highway_units)
-  results = tf.keras.layers.Bidirectional(layers = tf.keras.layers.GRU(rnn_units, return_sequences = True),
+  results = tf.keras.layers.Bidirectional(layer = tf.keras.layers.GRU(rnn_units, return_sequences = True),
                                           backward_layer = tf.keras.layers.GRU(rnn_units, return_sequences = True, go_backwards = True),
                                           merge_mode = 'concat')(results); # results.shape = (batch, seq_length, 2 * rnn_units)
   return tf.keras.Model(inputs = inputs, outputs = results);
@@ -411,4 +411,15 @@ if __name__ == "__main__":
   outputs = decoder(inputs, state);
   print(outputs[0][0].shape)
   print(outputs[0][1].shape)
-  # 5) 
+  # 5) PostNet
+  postnet = PostNet();
+  a = tf.constant(np.random.normal(size = (8, 100, 80)));
+  b = postnet(a);
+  print(b.shape);
+  postnet.save('postnet.h5');
+  # 6) CBHG
+  cbhg = CBHG();
+  a = tf.constant(np.random.normal(size = (8, 100, 80)));
+  b = cbhg(a);
+  print(b.shape);
+  cbhg.save('cbhg.h5');
