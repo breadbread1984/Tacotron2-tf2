@@ -102,8 +102,8 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
 
   def build(self, input_shape):
 
-    self.V = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.GlorotNormal());
-    self.b = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.Zeros());
+    self.V = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.GlorotNormal(), name = 'location_sensitive_attention_v');
+    self.b = self.add_weight(shape = (self.units,), initializer = tf.keras.initializers.Zeros(), name = 'location_sensitive_attention_b');
 
   def get_initial_state(self, inputs = None, batch_size = None, dtype = None):
 
