@@ -310,7 +310,7 @@ class Tacotron2(tf.keras.Model):
     code = self.encoder(inputs);
     self.decoder_cell.setup_memory(code);
     state = self.decoder_cell.get_initial_state(batch_size = tf.shape(inputs)[0]);
-    output = (tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels, self.decoder_cell.outputs_per_step)),
+    output = (tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels * self.decoder_cell.outputs_per_step)),
               tf.zeros((tf.shape(inputs)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
     outputs = list();
     while True:
