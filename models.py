@@ -164,7 +164,7 @@ class LocationSensitiveAttention(tf.keras.layers.Layer):
 # encoder
 def TacotronEncoder(enc_filters = 512, kernel_size = 5, enc_layers = 3, drop_rate = 0.5, enc_lstm_units = 256):
 
-  inputs = tf.keras.Input((None,)); # inputs.shape = (batch, seq_length)
+  inputs = tf.keras.Input((None, 512)); # inputs.shape = (batch, seq_length, 512)
   results = inputs;
   # 1) tacotron encoder cell
   # 1.1) convolutional layers
@@ -177,7 +177,7 @@ def TacotronEncoder(enc_filters = 512, kernel_size = 5, enc_layers = 3, drop_rat
   # output shape = (batch, seq_length, 2 * enc_lstm_units)
   results = tf.keras.layers.Bidirectional(
     layer = tf.keras.layers.RNN(ZoneoutLSTMCell(enc_lstm_units), return_sequences = True),
-    backward_layer = tf.keras.RNN(ZoneoutLSTMCell(enc_lstm_units), return_sequences = True, go_backwards = True),
+    backward_layer = tf.keras.layers.RNN(ZoneoutLSTMCell(enc_lstm_units), return_sequences = True, go_backwards = True),
     merge_mode = 'concat')(results);
   return tf.keras.Model(inputs = inputs, outputs = results);
 
@@ -304,7 +304,8 @@ class Tacotron2(tf.keras.Model):
     return decayed_learning_rate;
 
   def call(self, inputs):
-
+    
+    # inputs.shape = (batch, seq_length)
     code = self.encoder(inputs);
     self.decoder_cell.setup_memory(code);
     state = self.decoder_cell.get_initial_state();
@@ -331,14 +332,13 @@ class Tacotron2(tf.keras.Model):
 
     # inputs.shape = (batch, seq_length)
     # labels.shape = (batch, label_length, num_mels)
-    assert feed_mode in ['groundtruth', 'eval', 'scheduled'];
     # feed_mode:
     # 1) ground truth: always feed ground truth
     # 2) eval: always feed prediction of previous time
     # 3) scheduled: feed ground truth at first and gradually use feed prediction of previous time
     if feed_model == 'scheduled': assert iterations is not None;
     ratio = 1. if feed_mode == 'groundtruth' else (0. if feed_mode == 'eval' else (self.ratio(iterations) if feed_model == 'scheduled' else None));
-    assert ratio is not None:
+    if ratio is None: raise Exception("feed mode must be among 'groundtruth', 'eval' and 'scheduled'");
     # follow implement of TacoTrainingHelper
     code = self.encoder(inputs);
     state = self.decoder_cell.get_initial_state();
@@ -347,8 +347,8 @@ class Tacotron2(tf.keras.Model):
     outputs = list();
     stop_tokens = list();
     for i in range(tf.shape(labels)[1] - 1):
-      output = (tf.cond(tf.less(tf.random_uniform((), minval = 0, max_val = 1, dtype = tf.float32), ratio)
-                       lambda: labels[:,i,:], lambda: output[0] if i == 0 else outputs[-1]), output[1]);
+      output = (tf.cond(tf.less(tf.random_uniform((), minval = 0, max_val = 1, dtype = tf.float32), ratio),
+                        lambda: labels[:,i,:], lambda: output[0] if i == 0 else outputs[-1]), output[1]);
       output, state = self.decoder_cell(output, state); # output.shape = (batch, num_mels, outputs_per_step)
       outputs.append(output[0]); # output[0].shape = (batch, num_mels, outputs_per_step)
       stop_tokens.append(output[1]); # output[1].shape = (batch, output_per_step)
@@ -376,6 +376,7 @@ class Tacotron2(tf.keras.Model):
 
 if __name__ == "__main__":
 
+  # 1) zoneout lstm
   cell = ZoneoutLSTMCell(100);
   rnn = tf.keras.layers.RNN(cell);
   import numpy as np;
@@ -383,10 +384,16 @@ if __name__ == "__main__":
   state = [tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32), tf.constant(np.random.normal(size = (8, 100)), dtype = tf.float32)];
   b = rnn(a, initial_state = state);
   print(b.shape)
+  # 2) location sensitive attention
   lsa = LocationSensitiveAttention(100, synthesis_constraint = True);
   lsa.setup_memory(tf.zeros((8,10,32)));
   state = lsa.get_initial_state(batch_size = 8);
   query = tf.constant(np.random.normal(size = (8, 64)));
   a_t, (state, max_attention) = lsa(query, state);
   print(a_t.shape)
-  print(state.shape)
+  # 3) tacotron encoder
+  encoder = TacotronEncoder();
+  a = tf.constant(np.random.normal(size = (8, 100, 512)), dtype = tf.float32);
+  b = encoder(a);
+  print(b.shape);
+  encoder.save('tacotronencoder.h5');
