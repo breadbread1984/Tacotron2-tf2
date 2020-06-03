@@ -4,7 +4,7 @@ from math import cos, pi;
 import numpy as np;
 import tensorflow as tf;
 
-def PreNet(code_dim = 512, units = 256, layers = 2, drop_rate = 0.5):
+def PreNet(code_dim, units = 256, layers = 2, drop_rate = 0.5):
 
   inputs = tf.keras.Input((code_dim,)); # inputs.shape = (batch, hidden_dim)
   results = inputs;
@@ -185,9 +185,9 @@ def TacotronEncoder(enc_filters = 512, kernel_size = 5, enc_layers = 3, drop_rat
 # decoder
 class TacotronDecoderCell(tf.keras.layers.Layer):
 
-  def __init__(self, code_dim, num_mels = 80, outputs_per_step = 1, **kwargs):
+  def __init__(self, num_mels = 80, outputs_per_step = 1, **kwargs):
 
-    self.prenet = PreNet(code_dim);
+    self.prenet = PreNet(code_dim = num_mels * outputs_per_step);
     self.decoder_rnn = tf.keras.layers.RNN([ZoneoutLSTMCell(1024, 0.1, 0.1) for i in range(2)], return_state = True);
     self.attention_mechanism = LocationSensitiveAttention(128, cumulate_weights = True, synthesis_constraint = False);
     self.frame_projection = tf.keras.layers.Dense(units = num_mels * outputs_per_step, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
@@ -230,7 +230,6 @@ class TacotronDecoderCell(tf.keras.layers.Layer):
     # 5) compute predicted frames and predicted stop token
     projections_input = tf.concat([lstm_output, c_t], axis = -1); # projections_input.shape = (batch, 1024 + hidden_dim)
     cell_outputs = self.frame_projection(projections_input); # cell_outputs.shape = (batch, num_mels * outputs_per_step)
-    cell_outputs = tf.keras.layers.Reshape((self.num_mels, self.outputs_per_step))(cell_outputs); # cell_outputs.shape = (batch, num_mels, outputs_per_step)
     stop_tokens = self.stop_projection(projections_input); # stop_outputs.shape = (batch, outputs_per_step)
     return (cell_outputs, stop_tokens), (c_t, (next_hidden_state, next_cell_state), (attention_state, max_attentions));
 
@@ -286,10 +285,10 @@ def CBHG(kernel_size = 8, num_mels = 80, highway_units = 128, highway_layers = 4
 
 class Tacotron2(tf.keras.Model):
 
-  def __init__(self, num_mels = 80):
+  def __init__(self, num_mels = 80, outputs_per_step = 1):
 
     self.encoder = TacotronEncoder();
-    self.decoder_cell = TacotronDecoderCell(code_dim = self.encoder.outputs[0].shape[-1], num_mels = num_mels);
+    self.decoder_cell = TacotronDecoderCell(code_dim = num_mels * outputs_per_step, num_mels = num_mels);
     self.postnet = PostNet(num_mels = num_mels);
     self.frame_projection = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
     self.frame_projection2 = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
@@ -405,10 +404,11 @@ if __name__ == "__main__":
   print(b.shape);
   encoder.save('tacotronencoder.h5');
   # 4) TacotronDecoderCell
-  decoder = TacotronDecoderCell(code_dim = 512);
+  decoder = TacotronDecoderCell();
   decoder.setup_memory(a);
   state = decoder.get_initial_state(batch_size = 8);
-  inputs = (tf.zeros((8, 80, 1)), tf.zeros((8, 1)));
+  inputs = (tf.zeros((8, 80)), tf.zeros((8, 1)));
   outputs = decoder(inputs, state);
-  print(outputs[0].shape)
-  print(outputs[1].shape)
+  print(outputs[0][0].shape)
+  print(outputs[0][1].shape)
+  # 5) 
