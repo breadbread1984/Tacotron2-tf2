@@ -287,8 +287,9 @@ class Tacotron2(tf.keras.Model):
 
   def __init__(self, num_mels = 80, outputs_per_step = 1):
 
+    super(Tacotron2, self).__init__();
     self.encoder = TacotronEncoder();
-    self.decoder_cell = TacotronDecoderCell(code_dim = num_mels * outputs_per_step, num_mels = num_mels);
+    self.decoder_cell = TacotronDecoderCell(num_mels = num_mels, outputs_per_step = outputs_per_step);
     self.postnet = PostNet(num_mels = num_mels);
     self.frame_projection = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
     self.frame_projection2 = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
@@ -306,7 +307,7 @@ class Tacotron2(tf.keras.Model):
 
   def call(self, inputs):
     
-    # inputs.shape = (batch, seq_length)
+    # inputs.shape = (batch, seq_length, 512)
     code = self.encoder(inputs);
     self.decoder_cell.setup_memory(code);
     state = self.decoder_cell.get_initial_state(batch_size = tf.shape(inputs)[0]);
@@ -423,3 +424,9 @@ if __name__ == "__main__":
   b = cbhg(a);
   print(b.shape);
   cbhg.save('cbhg.h5');
+  # 7) Tacotron2
+  tacotron2 = Tacotron2();
+  a = tf.constant(np.random.normal(size = (8, 100, 512)));
+  b = tacotron2(a);
+  print(b.shape);
+  tacotron2.save_weights('tacotron2.h5');
