@@ -308,13 +308,12 @@ class Tacotron2(tf.keras.Model):
 
   def call(self, inputs):
     
-    data = inputs[0]; # data.shape = (batch, seq_length, 512)
-    predict_mel = inputs[1]; # predict_mel.shape = ()
-    code = self.encoder(data);
+    # inputs.shape = (batch, seq_length, 512)
+    code = self.encoder(inputs);
     self.decoder_cell.setup_memory(code);
-    state = self.decoder_cell.get_initial_state(batch_size = tf.shape(data)[0]);
-    output = (tf.zeros((tf.shape(data)[0], self.decoder_cell.num_mels * self.decoder_cell.outputs_per_step)),
-              tf.zeros((tf.shape(data)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
+    state = self.decoder_cell.get_initial_state(batch_size = tf.shape(inputs)[0]);
+    output = (tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels * self.decoder_cell.outputs_per_step)),
+              tf.zeros((tf.shape(inputs)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
     outputs = list();
     while True:
       output, state = self.decoder_cell(output, state); # output[0].shape = (batch, num_mels * outputs_per_step)
@@ -331,15 +330,11 @@ class Tacotron2(tf.keras.Model):
     results = self.frame_projection(results); # results.shape = (batch, output_length, num_mels)
     mel_outputs = tf.keras.layers.Add()([results, decoder_outputs]); # mel_outputs.shape = (batch, output_length, num_mels)
     mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4., clip_value_max = 4.); # mel_outputs.shape = (batch, output_length, num_mels)
-    if predict_mel:
-      # predict mel
-      return mel_outputs;
-    else:
-      # predict wave directly
-      post_cbhg = self.cbhg(mel_outputs); # post_cbhg.shape = (batch, label_length - 1, 2 * rnn_units)
-      linear_outputs = self.linear_specs_projection(post_cbhg); # linear_outputs.shape = (batch, label_length - 1, num_freq)
-      linear_outputs = tf.clip_by_value(linear_outputs, clip_value_min = -4., clip_value_max = 4.); # linear_outputs.shape = (batch, albel_length - 1, num_freq)
-      return linear_outputs;
+    # predict linear spectrogram
+    post_cbhg = self.cbhg(mel_outputs); # post_cbhg.shape = (batch, label_length - 1, 2 * rnn_units)
+    linear_outputs = self.linear_specs_projection(post_cbhg); # linear_outputs.shape = (batch, label_length - 1, num_freq)
+    linear_outputs = tf.clip_by_value(linear_outputs, clip_value_min = -4., clip_value_max = 4.); # linear_outputs.shape = (batch, albel_length - 1, num_freq)
+    return mel_outputs, linear_outputs;
 
   def loss(self, inputs, labels, feed_mode = 'groundtruth', iterations = None, sample_rate = 22050, num_freq = 1025):
 
