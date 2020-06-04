@@ -286,14 +286,14 @@ def CBHG(kernel_size = 8, num_mels = 80, highway_units = 128, highway_layers = 4
 
 class Tacotron2(tf.keras.Model):
 
-  def __init__(self, num_mels = 80, outputs_per_step = 1):
+  def __init__(self, num_mels = 80, outputs_per_step = 1, num_freq = 1025):
 
     super(Tacotron2, self).__init__();
     self.encoder = TacotronEncoder();
     self.decoder_cell = TacotronDecoderCell(num_mels = num_mels, outputs_per_step = outputs_per_step);
     self.postnet = PostNet(num_mels = num_mels);
     self.frame_projection = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
-    self.frame_projection2 = tf.keras.layers.Dense(units = num_mels, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
+    self.linear_specs_projection = tf.keras.layers.Dense(units = num_freq, kernel_regularizer = tf.keras.regularizers.l2(l = 5e-3));
     self.cbhg = CBHG(num_mels = num_mels);
 
   def ratio(self, iterations):
@@ -308,12 +308,13 @@ class Tacotron2(tf.keras.Model):
 
   def call(self, inputs):
     
-    # inputs.shape = (batch, seq_length, 512)
-    code = self.encoder(inputs);
+    data = inputs[0]; # data.shape = (batch, seq_length, 512)
+    predict_mel = inputs[1]; # predict_mel.shape = ()
+    code = self.encoder(data);
     self.decoder_cell.setup_memory(code);
-    state = self.decoder_cell.get_initial_state(batch_size = tf.shape(inputs)[0]);
-    output = (tf.zeros((tf.shape(inputs)[0], self.decoder_cell.num_mels * self.decoder_cell.outputs_per_step)),
-              tf.zeros((tf.shape(inputs)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
+    state = self.decoder_cell.get_initial_state(batch_size = tf.shape(data)[0]);
+    output = (tf.zeros((tf.shape(data)[0], self.decoder_cell.num_mels * self.decoder_cell.outputs_per_step)),
+              tf.zeros((tf.shape(data)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
     outputs = list();
     while True:
       output, state = self.decoder_cell(output, state); # output[0].shape = (batch, num_mels * outputs_per_step)
@@ -325,21 +326,31 @@ class Tacotron2(tf.keras.Model):
     if len(outputs) == 1: results = outputs[0];
     else: results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, output_length * num_mels * outputs_per_step)
     decoder_outputs = tf.keras.layers.Reshape((-1, self.decoder_cell.num_mels))(results); # results.shape = (batch, output_length, num_mels)
-    decoder_outputs = tf.clip_by_value(decoder_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, output_length, num_mels)
+    decoder_outputs = tf.clip_by_value(decoder_outputs, clip_value_min = -4., clip_value_max = 4.); # results.shape = (batch, output_length, num_mels)
     results = self.postnet(decoder_outputs); # results.shape = (batch, output_length, 512)
     results = self.frame_projection(results); # results.shape = (batch, output_length, num_mels)
     mel_outputs = tf.keras.layers.Add()([results, decoder_outputs]); # mel_outputs.shape = (batch, output_length, num_mels)
-    mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # mel_outputs.shape = (batch, output_length, num_mels)
-    return mel_outputs;
+    mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4., clip_value_max = 4.); # mel_outputs.shape = (batch, output_length, num_mels)
+    if predict_mel:
+      # predict mel
+      return mel_outputs;
+    else:
+      # predict wave directly
+      post_cbhg = self.cbhg(mel_outputs); # post_cbhg.shape = (batch, label_length - 1, 2 * rnn_units)
+      linear_outputs = self.linear_specs_projection(post_cbhg); # linear_outputs.shape = (batch, label_length - 1, num_freq)
+      linear_outputs = tf.clip_by_value(linear_outputs, clip_value_min = -4., clip_value_max = 4.); # linear_outputs.shape = (batch, albel_length - 1, num_freq)
+      return linear_outputs;
 
   def loss(self, inputs, labels, feed_mode = 'groundtruth', iterations = None, sample_rate = 22050, num_freq = 1025):
 
     # inputs.shape = (batch, seq_length)
-    # labels.shape = (batch, label_length, num_mels)
+    # labels.shape = ((batch, label_length, num_mels),(batch, label_length, 256))
     # feed_mode:
     # 1) ground truth: always feed ground truth
     # 2) eval: always feed prediction of previous time
     # 3) scheduled: feed ground truth at first and gradually use feed prediction of previous time
+    mel_labels = labels[0];
+    linear_labels = labels[1];
     if feed_model == 'scheduled': assert iterations is not None;
     ratio = 1. if feed_mode == 'groundtruth' else (0. if feed_mode == 'eval' else (self.ratio(iterations) if feed_model == 'scheduled' else None));
     if ratio is None: raise Exception("feed mode must be among 'groundtruth', 'eval' and 'scheduled'");
@@ -350,31 +361,32 @@ class Tacotron2(tf.keras.Model):
               tf.zeros((tf.shape(inputs)[0], self.decoder_cell.outputs_per_step))); # initial frame is zero
     outputs = list();
     stop_tokens = list();
-    for i in range(tf.shape(labels)[1] - 1):
+    for i in range(tf.shape(mel_labels)[1] - 1):
       output = (tf.cond(tf.less(tf.random_uniform((), minval = 0, max_val = 1, dtype = tf.float32), ratio),
-                        lambda: labels[:,i,:], lambda: output[0] if i == 0 else outputs[-1]), output[1]);
+                        lambda: mel_labels[:,i,:], lambda: output[0] if i == 0 else outputs[-1]), output[1]);
       output, state = self.decoder_cell(output, state); # output.shape = (batch, num_mels, outputs_per_step)
       outputs.append(output[0]); # output[0].shape = (batch, num_mels, outputs_per_step)
       stop_tokens.append(output[1]); # output[1].shape = (batch, output_per_step)
-    assert(len(outputs) == tf.shape(labels)[1] - 1);
+    assert(len(outputs) == tf.shape(mel_labels)[1] - 1);
     if len(outputs) == 1: results = outputs[0];
     else: results = tf.keras.layers.Concatenate(axis = 1)(outputs); # results.shape = (batch, label_length - 1, outputs_per_step)
     decoder_outputs = tf.keras.layers.Reshape((None, self.decoder_cell.num_mels))(results); # results.shape = (batch, label_length - 1, num_mels)
-    decoder_outputs = tf.clip_by_value(decoder_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # results.shape = (batch, label_length - 1, num_mels)
+    decoder_outputs = tf.clip_by_value(decoder_outputs, clip_value_min = -4., clip_value_max = 4.); # results.shape = (batch, label_length - 1, num_mels)
     stop_tokens = tf.keras.layers.Concatenate(axis = 1)(stop_tokens); # stop_tokens.shape = (batch, outpuut_per_step * (label_length - 1))
     results = self.postnet(decoder_outputs); # results.shape = (batch, label_length - 1, 512)
     results = self.frame_projection(results); # results.shape = (batch, label_length - 1, num_mels)
     mel_outputs = tf.keras.layers.Add()([results, decoder_outputs]); # mel_outputs.shape = (batch, label_length - 1, num_mels)
-    mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4. - 0.1, clip_value_max = 4.); # mel_outputs.shape = (batch, label_length - 1, num_mels)
+    mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4., clip_value_max = 4.); # mel_outputs.shape = (batch, label_length - 1, num_mels)
     # post condition
     post_cbhg = self.cbhg(mel_outputs); # post_cbhg.shape = (batch, label_length - 1, 2 * rnn_units)
-    linear_specs_projection = self.frame_projection2(post_cbhg); # linear_specs_projection.shape = (batch, label_length - 1, num_mels)
+    linear_outputs = self.linear_specs_projection(post_cbhg); # linear_outputs.shape = (batch, label_length - 1, num_freq)
+    linear_outputs = tf.clip_by_value(linear_outputs, clip_value_min = -4., clip_value_max = 4.); # linear_outputs.shape = (batch, albel_length - 1, num_freq)
     # get loss
-    regression_loss = tf.keras.losses.MSE(labels[:,1:,:], decoder_outputs) + tf.keras.losses.MSE(labels[:,1:,:], mel_outputs);
-    stop_tokens_gt = tf.keras.layers.Concatenate(axis = -1)([tf.zeros((tf.shape(inputs)[0], tf.shape(labels)[1] - 2), dtype = tf.float32), 
+    regression_loss = tf.keras.losses.MSE(mel_labels[:,1:,:], decoder_outputs) + tf.keras.losses.MSE(mel_labels[:,1:,:], mel_outputs);
+    stop_tokens_gt = tf.keras.layers.Concatenate(axis = -1)([tf.zeros((tf.shape(inputs)[0], tf.shape(mel_labels)[1] - 2), dtype = tf.float32), 
                                                              tf.ones((tf.shape(inputs)[0], 1), dtype = tf.float32)]); # stop_tokens_gt.shape = (batch, label_length - 1)
     classification_loss = tf.keras.losses.BinaryCrossentropy(from_logits = True)(stop_tokens_gt, stop_tokens);
-    l1 = tf.math.abs(labels[:,1:,:] - linear_specs_projection);
+    l1 = tf.math.abs(linear_labels[:,1:,:] - linear_outputs);
     n_priority_freq = int(2000 / (sample_rate * 0.5) * num_freq);
     linear_loss = 0.5 * tf.math.reduce_mean(l1) + 0.5 * tf.math.reduce_mean(l1[:,:,n_priority_freq]);
     return regression_loss + classification_loss + linear_loss;
