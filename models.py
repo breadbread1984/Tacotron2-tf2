@@ -331,9 +331,9 @@ class Tacotron2(tf.keras.Model):
     mel_outputs = tf.keras.layers.Add()([results, decoder_outputs]); # mel_outputs.shape = (batch, output_length, num_mels)
     mel_outputs = tf.clip_by_value(mel_outputs, clip_value_min = -4., clip_value_max = 4.); # mel_outputs.shape = (batch, output_length, num_mels)
     # predict linear spectrogram
-    post_cbhg = self.cbhg(mel_outputs); # post_cbhg.shape = (batch, label_length - 1, 2 * rnn_units)
-    linear_outputs = self.linear_specs_projection(post_cbhg); # linear_outputs.shape = (batch, label_length - 1, num_freq)
-    linear_outputs = tf.clip_by_value(linear_outputs, clip_value_min = -4., clip_value_max = 4.); # linear_outputs.shape = (batch, albel_length - 1, num_freq)
+    post_cbhg = self.cbhg(mel_outputs); # post_cbhg.shape = (batch, label_length, 2 * rnn_units)
+    linear_outputs = self.linear_specs_projection(post_cbhg); # linear_outputs.shape = (batch, label_length, num_freq)
+    linear_outputs = tf.clip_by_value(linear_outputs, clip_value_min = -4., clip_value_max = 4.); # linear_outputs.shape = (batch, label_length, num_freq)
     return mel_outputs, linear_outputs;
 
   def loss(self, inputs, labels, feed_mode = 'groundtruth', iterations = None, sample_rate = 22050, num_freq = 1025):
