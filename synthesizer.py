@@ -3,6 +3,7 @@
 import librosa;
 import pyaudio;
 import numpy as np;
+from scipy import signal;
 import tensorflow as tf;
 from models import Tacotron2;
 from tokenizer import Tokenizer;
@@ -59,6 +60,9 @@ class Synthesizer(object):
     mel_outputs, linear_outputs = self.tts(embedding); # mel_outputs.shape = (1, token_length, 80)
                                                        # linear_outputs.shape = (1, token_length, 512)
     mel = self.inv_mel_spectrogram(mel_outputs);
+    wav = signal.lfilter([1], [1,-0.97], mel);
+    audio.save_wav(wav, "mel.wav", sr = 22050);
     linear = self.inv_linear_spectrogram(linear_outputs);
-    # TODO
-    return mel_outputs;
+    wav = signal.lfilter([1], [1,-0.97], linear);
+    audio.save_wav(wav, "linear.wav", sr = 22050);
+    return mel, linear;
